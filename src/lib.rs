@@ -145,6 +145,7 @@ impl Emu {
                 let x = digit2 as usize;
                 let y = digit3 as usize;
                 match digit4 {
+                    0 => self.v_reg[x] = self.v_reg[y],
                     1 => self.v_reg[x] |= self.v_reg[y],
                     2 => self.v_reg[x] &= self.v_reg[y],
                     3 => self.v_reg[x] ^= self.v_reg[y],
@@ -172,9 +173,9 @@ impl Emu {
                         self.v_reg[0xF] = lsb;
                     },
                     0xE => {
-                        let lsb = self.v_reg[x] & 1;
+                        let msb = (self.v_reg[x] >> 7) & 1;
                         self.v_reg[x] <<= 1;
-                        self.v_reg[0xF] = lsb;
+                        self.v_reg[0xF] = msb;
                     },
                     _ => unimplemented!("Unimplemented opcode: {}", op),
 
