@@ -41,6 +41,7 @@ pub struct Emu {
     keys: [bool; NUM_KEYS],
     dt: u8,
     st: u8,
+    pub waiting_vblank: bool,
 }
 
 impl Emu {
@@ -56,6 +57,7 @@ impl Emu {
             keys: [false; NUM_KEYS],
             dt: 0,
             st: 0,
+            waiting_vblank: false,
         };
         new_emu.ram[..FONTSET_SIZE].copy_from_slice(&FONTSET);
         new_emu
@@ -87,6 +89,7 @@ impl Emu {
         self.dt = 0;
         self.st = 0;
         self.ram[..FONTSET_SIZE].copy_from_slice(&FONTSET);
+        self.waiting_vblank = false;
     }
 
     fn push(&mut self, val: u16) {
@@ -100,6 +103,9 @@ impl Emu {
     }
 
     pub fn tick(&mut self) {
+        if self.waiting_vblank {
+            return;
+        }
         //Fetch
         let op = self.fetch();
 
@@ -146,9 +152,18 @@ impl Emu {
                 let y = digit3 as usize;
                 match digit4 {
                     0 => self.v_reg[x] = self.v_reg[y],
-                    1 => self.v_reg[x] |= self.v_reg[y],
-                    2 => self.v_reg[x] &= self.v_reg[y],
-                    3 => self.v_reg[x] ^= self.v_reg[y],
+                    1 => {
+                        self.v_reg[0xF] = 0;
+                        self.v_reg[x] |= self.v_reg[y];
+                    },
+                    2 => {
+                        self.v_reg[0xF] = 0;
+                        self.v_reg[x] &= self.v_reg[y];
+                    },
+                    3 => {
+                        self.v_reg[0xF] = 0;
+                        self.v_reg[x] ^= self.v_reg[y];
+                    },
                     4 => {
                         let (new_vx, carry) = self.v_reg[x].overflowing_add(self.v_reg[y]);
                         let new_vf = if carry { 1 } else { 0 };
@@ -168,11 +183,13 @@ impl Emu {
                         self.v_reg[0xF] = new_vf;
                     },
                     6 => {
+                        self.v_reg[x] = self.v_reg[y];
                         let lsb = self.v_reg[x] & 1;
                         self.v_reg[x] >>= 1;
                         self.v_reg[0xF] = lsb;
                     },
                     0xE => {
+                        self.v_reg[x] = self.v_reg[y];
                         let msb = (self.v_reg[x] >> 7) & 1;
                         self.v_reg[x] <<= 1;
                         self.v_reg[0xF] = msb;
@@ -244,6 +261,7 @@ impl Emu {
                 for idx in 0..=x {
                     self.ram[i + idx] = self.v_reg[idx];
                 }
+                self.i_reg += (x + 1) as u16;
             },
             (0xF,_,6,5) => {
                 let x = digit2 as usize;
@@ -251,26 +269,36 @@ impl Emu {
                 for idx in 0..=x {
                     self.v_reg[idx] = self.ram[i + idx];
                 }
+                self.i_reg += (x + 1) as u16;
             },
             (_,_,_,_) => unimplemented!("Unimplemented opcode: {}", op),
         }
     }
 
     fn display(&mut self, vx_val:u8, vy_val:u8, n:u8) {
-        let x_coord = self.v_reg[vx_val as usize] as u16;
-        let y_coord = self.v_reg[vy_val as usize] as u16;
+        let x_coord = (self.v_reg[vx_val as usize] as usize) % SCREEN_WIDTH;
+        let y_coord = (self.v_reg[vy_val as usize] as usize) % SCREEN_HEIGHT;
 
         let mut flipped = false;
 
-        for y_line in 0..n {
+        for y_line in 0..(n as usize) {
+            let y = y_coord + y_line;
+
+            if y >= SCREEN_HEIGHT {
+                break;
+            }
+
             let addr = self.i_reg + y_line as u16;
             let pixels = self.ram[addr as usize];
 
             for x_line in 0..8 {
-                if (pixels & (0b1000_0000 >> x_line)) != 0 {
-                    let x = (x_coord + x_line) as usize % SCREEN_WIDTH;
-                    let y = (y_coord + y_line as u16) as usize % SCREEN_HEIGHT;
+                let x = x_coord + x_line;
 
+                if x >= SCREEN_WIDTH {
+                    break;
+                }
+
+                if (pixels & (0b1000_0000 >> x_line)) != 0 {
                     let idx = x + SCREEN_WIDTH * y;
 
                     flipped |= self.screen[idx];
@@ -278,6 +306,7 @@ impl Emu {
                 }
             }
         }
+        self.waiting_vblank = true;
         self.v_reg[0xF] = flipped as u8;
     }
 
@@ -305,5 +334,6 @@ impl Emu {
             }
             self.st -= 1;
         }
+        self.waiting_vblank = false;
     }
 }
